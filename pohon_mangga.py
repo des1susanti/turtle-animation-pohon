@@ -46,6 +46,28 @@ screen.colormode(255)
 screen.tracer(0)
 
 
+# Daun & bunga jumlahnya ribuan, jadi digambar langsung ke kanvas Tk (jauh lebih cepat
+# daripada lewat turtle) supaya animasi tidak tersendat dan kursor tidak berputar.
+CV = screen.getcanvas()
+
+
+def fpoly(pts, fill, tag):
+    CV.create_polygon([c for (x, y) in pts for c in (x, -y)], fill=fill, outline="", tags=("cepat", tag))
+
+
+def fline(a, b, width, color, tag):
+    CV.create_line(a[0], -a[1], b[0], -b[1], fill=color, width=width, tags=("cepat", tag))
+
+
+def fdot(x, y, size, color, tag):
+    r = size / 2
+    CV.create_oval(x - r, -y - r, x + r, -y + r, fill=color, outline="", tags=("cepat", tag))
+
+
+def fclear(tag):
+    CV.delete(tag)
+
+
 def pen():
     p = turtle.Turtle(visible=False)
     p.speed(0)
@@ -505,22 +527,28 @@ def stage_leaves(p, tips, nodes, rnd):
                               (0 if side > 0 else 180) + rnd.uniform(-50, 50)))
     rnd.shuffle(spots)
     dark = ["#0F4A24", "#145A2E", "#1A6B36"]
+    # 5 ketukan: mula-mula hanya beberapa daun, lalu makin banyak, ketukan ke-5 rimbun
+    n = len(spots)
+    marks = {2: 0, max(3, n * 5 // 100): 1, max(4, n // 10): 2, max(5, n // 2): 3, n: 4}
     for i, (x, y, h) in enumerate(spots):
         # lapisan belakang: daun gelap lebih besar mengisi celah tajuk
         for _ in range(2):
             ang = h + rnd.uniform(-90, 90)
             L = rnd.uniform(30, 42)
-            polygon(p, leaf_pts(x, y, ang, L, L * 0.32, n=6), rnd.choice(dark))
+            fpoly(leaf_pts(x, y, ang, L, L * 0.32, n=6), rnd.choice(dark), "daun")
         # lapisan depan: daun terang dengan tulang daun
         for _ in range(rnd.choice([3, 4, 5])):
             ang = h + rnd.uniform(-80, 80)
             L = rnd.uniform(24, 36)
             col = rnd.choice(LEAF_COLORS)
-            polygon(p, leaf_pts(x, y, ang, L, L * 0.28, n=7), col)
-            line(p, (x, y), polar(x, y, ang, L * 0.85), 1, "#9CFFB0")  # tulang daun
-        if i % 40 == 0:
+            fpoly(leaf_pts(x, y, ang, L, L * 0.28, n=7), col, "daun")
+            fline((x, y), polar(x, y, ang, L * 0.85), 1, "#9CFFB0", "daun")  # tulang daun
+        if (i + 1) in marks:
             tick()
-    tick(8)
+    tick()
+
+
+FLOWER_GROUPS = 3
 
 
 def stage_flowers(p, tips, nodes, rnd):
@@ -528,6 +556,7 @@ def stage_flowers(p, tips, nodes, rnd):
     chosen = list(tips) + [(x, y, h) for (x, y, h, d) in nodes if d >= 4 and rnd.random() < 0.6]
     rnd.shuffle(chosen)
     petals = []
+    batch = max(1, -(-len(chosen) // 3))  # 3 ketukan: bunga mekar serentak
     for i, (x, y, h) in enumerate(chosen):
         # malai bunga mangga: kerucut kecil berisi titik-titik
         for k in range(18):
@@ -536,12 +565,12 @@ def stage_flowers(p, tips, nodes, rnd):
             fx = x + rnd.uniform(-spread, spread)
             fy = y + 4 + u * 26
             size, col = rnd.choice([4, 5, 6]), rnd.choice(FLOWER_COLORS)
-            p.goto(fx, fy)
-            p.dot(size, col)
-            petals.append((fx, fy, size, col))
-        if i % 2 == 0:
+            g = rnd.randrange(FLOWER_GROUPS)  # rombongan rontok nanti
+            fdot(fx, fy, size, col, "bunga%d" % g)
+            petals.append((fx, fy, size, col, g))
+        if (i + 1) % batch == 0:
             tick()
-    tick(40)
+    tick(4)
     return petals
 
 
@@ -570,30 +599,21 @@ def stage_fruits(flower_pen, fruit_pen, flowers, tips, rnd):
     cand = lower[: max(26, len(lower) * 2 // 3)]
     rnd.shuffle(cand)
     fruits = [(x, y, rnd.uniform(-0.25, 0.25)) for (x, y, h) in cand[:26]]
-    # bunga rontok tanpa layu: kelopak melayang dengan warna aslinya lalu berserakan di tanah
-    allf = [(x, y, size, col) for (x, y, size, col) in flowers]
-    falls, stays = [], []
-    for (x, y, size, col) in allf:
-        if rnd.random() < 0.3:
-            falls.append({"x0": x, "y0": y, "size": size * 0.8, "col": col, "start": rnd.randint(0, 45),
-                          "dur": rnd.randint(40, 70), "drift": rnd.uniform(-40, 40), "amp": rnd.uniform(5, 14),
-                          "freq": rnd.uniform(0.15, 0.28), "phase": rnd.uniform(0, 6.28),
+    # bunga rontok tanpa layu: kelopak melayang dengan warna aslinya lalu berserakan di tanah.
+    # Bunga dibagi ke 3 rombongan; tiap rombongan hilang dari dahan sekaligus.
+    NB, GAP = FLOWER_GROUPS, 3
+    falls = []
+    for (x, y, size, col, g) in flowers:
+        if rnd.random() < 0.22:
+            falls.append({"x0": x, "y0": y, "size": size * 0.8, "col": col, "start": g * GAP + rnd.randint(0, 2),
+                          "dur": rnd.randint(9, 14), "drift": rnd.uniform(-40, 40), "amp": rnd.uniform(5, 14),
+                          "freq": rnd.uniform(0.5, 0.8), "phase": rnd.uniform(0, 6.28),
                           "land": GROUND + rnd.uniform(1, 7), "done": False})
-        else:
-            stays.append((x, y, size, col, rnd.randint(3, 60)))
-    flower_pen.clear()
-    branch, air = pen(), pen()
-    for f in range(120):
-        if f % 4 == 0:  # bunga di dahan yang tidak jatuh hilang satu per satu
-            branch.clear()
-            for (x, y, size, col, gone) in stays:
-                if f < gone:
-                    branch.goto(x, y)
-                    branch.dot(size, col)
-            for d in falls:
-                if f < d["start"]:
-                    branch.goto(d["x0"], d["y0"])
-                    branch.dot(d["size"], d["col"])
+    air = pen()
+    frames = NB * GAP + 15
+    for f in range(frames):
+        if f % GAP == 0 and f // GAP < NB:
+            fclear("bunga%d" % (f // GAP))
         air.clear()
         for d in falls:
             if d["done"] or f < d["start"]:
@@ -609,19 +629,17 @@ def stage_fruits(flower_pen, fruit_pen, flowers, tips, rnd):
             air.goto(x, y)
             air.dot(d["size"], d["col"])
         tick()
-    branch.clear()
     air.clear()
-    for k in range(1, 26):  # buah membesar
-        draw_mangoes(fruit_pen, fruits, k / 25, 0.0)
-        tick()
-    tick(8)
+    for k in range(1, 6):  # buah membesar dalam 5 ketukan
+        draw_mangoes(fruit_pen, fruits, k / 5, 0.0)
+        tick(2)
     return fruits
 
 
 def stage_ripen(fruit_pen, fruits):
     caption("8. Mangga matang, siap dipanen!", "#FFB020")
-    for k in range(1, 31):
-        draw_mangoes(fruit_pen, fruits, 1.0, k / 30)
+    for k in range(1, 6):  # matang dalam 5 ketukan
+        draw_mangoes(fruit_pen, fruits, 1.0, k / 5)
         tick()
 
 
@@ -630,6 +648,7 @@ pens = []
 
 
 def run():
+    fclear("cepat")
     for p in pens:
         p.clear()
     pens.clear()
